@@ -1,0 +1,24 @@
+{
+  "Amelia": [
+    {"ID": 1, "Stunde": "1. 08:00 - 08:45", "Mo": "FA", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"ID": 2, "Stunde": "2. 08:45 - 09:30", "Mo": "FA", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"ID": 3, "Stunde": "3. 09:30 - 10:15", "Mo": "Engl. M3/M4", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"break": true, "Stunde": "10:15 - 10:45", "label": "Pause"},
+    {"ID": 4, "Stunde": "4. 10:45 - 11:30", "Mo": "Sach. M8", "Di": "Engl. M3/M4", "Mi": "Engl. Le M5", "Do": "FA", "Fr": "FA"},
+    {"ID": 5, "Stunde": "5. 11:35 - 12:20", "Mo": "Sach. M8", "Di": "Sport", "Mi": "Musik M1", "Do": "Religion M8", "Fr": "Kunst M3/M4"},
+    {"break": true, "Stunde": "12:20 - 12:30", "label": "Pause"},
+    {"ID": 6, "Stunde": "6. 12:30 - 13:15", "Mo": "Religion M8", "Di": "Sport", "Mi": "-", "Do": "-", "Fr": "Kunst M3/M4"}
+  ]
+}
+{
+  "Jari": [
+    {"ID": 1, "Stunde": "1. 08:00 - 08:45", "Mo": "FA", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"ID": 2, "Stunde": "2. 08:45 - 09:30", "Mo": "FA", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"ID": 3, "Stunde": "3. 09:30 - 10:15", "Mo": "Engl. M3/M4", "Di": "FA", "Mi": "FA", "Do": "FA", "Fr": "FA"},
+    {"break": true, "Stunde": "10:15 - 10:45", "label": "Pause"},
+    {"ID": 4, "Stunde": "4. 10:45 - 11:30", "Mo": "Sach. M8", "Di": "Engl. M3/M4", "Mi": "Engl. Le M5", "Do": "FA", "Fr": "FA"},
+    {"ID": 5, "Stunde": "5. 11:35 - 12:20", "Mo": "Sach. M8", "Di": "Sport", "Mi": "Musik M1", "Do": "Religion M8", "Fr": "Kunst M3/M4"},
+    {"break": true, "Stunde": "12:20 - 12:30", "label": "Pause"},
+    {"ID": 6, "Stunde": "6. 12:30 - 13:15", "Mo": "Religion M8", "Di": "Sport", "Mi": "-", "Do": "-", "Fr": "Kunst M3/M4"}
+  ]
+}

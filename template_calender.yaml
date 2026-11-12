@@ -1,0 +1,41 @@
+- trigger:
+    - platform: time_pattern
+      minutes: "/15"
+    - platform: homeassistant
+      event: start
+    - platform: event
+      event_type: eink_kalender_refresh
+  action:
+    - service: calendar.get_events
+      target:
+        entity_id: calendar.amelia
+      data:
+        start_date_time: "{{ today_at('00:00') }}"
+        end_date_time: "{{ today_at('00:00') + timedelta(days=2) }}"
+      response_variable: cal
+  sensor:
+  - sensor:
+    - name: "Eink test"
+      unique_id: eink_test
+      state: "oik"
+    - name: "Eink Kalender"
+      unique_id: eink_kalender
+      state: "{{ now().isoformat() }}"
+      attributes:
+        heute: >-
+          {%- set ns = namespace(l=[]) -%}
+          {%- for e in cal['calendar.amelia'].events
+             if as_datetime(e.start).date() == now().date() -%}
+            {%- set t = as_datetime(e.start).strftime('%H:%M') if e.start|length > 10 else 'ganztägig' -%}
+            {%- set ns.l = ns.l + [t ~ '  ' ~ e.summary] -%}
+          {%- endfor -%}
+          {{ ns.l[:6] | join('\n') if ns.l else 'Keine Termine' }}
+        morgen: >-
+          {%- set ns = namespace(l=[]) -%}
+          {%- for e in cal['calendar.amelia'].events
+             if as_datetime(e.start).date() == (now() + timedelta(days=1)).date() -%}
+            {%- set t = as_datetime(e.start).strftime('%H:%M') if e.start|length > 10 else 'ganztägig' -%}
+            {%- set ns.l = ns.l + [t ~ '  ' ~ e.summary] -%}
+          {%- endfor -%}
+          {{ ns.l[:6] | join('\n') if ns.l else 'Keine Termine' }}
+

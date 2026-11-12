@@ -1,0 +1,748 @@
+## =====================================================================
+## Alles Konfigurierbare an einer Stelle:
+## - todo_entity      -> die Home-Assistant todo.*-Liste, die angezeigt wird
+##                        (wird für den Template-Sensor in Home Assistant
+##                        gebraucht, siehe Kommentarblock ganz unten)
+## - ha_sensor_entity -> der HA-Sensor, dessen Attribut "list" die
+##                        aufbereitete Liste (durch \n getrennt) enthält
+## - display_title    -> Überschrift auf dem Display
+## Schematics: https://files.waveshare.com/wiki/ESP32-S3-ePaper-3.97/ESP32-S3_e-Paper-3.97-schematic.pdf 
+## GPIO  1: 
+## GPIO  2:
+## =====================================================================
+##                           ESP32-S3
+##                  +-------------------+
+##             GND  | 1               41| GND (Thermal Pad)
+##             3V3  | 2                 |
+##              EN  | 3               40| GND
+##   JOG-UP    IO4  | 4               39| IO1
+##   JOG-PUSH  IO5  | 5               38| IO2
+##   JOG-DOWN  IO6  | 6               37| IO43/TXD   STATUS_LED
+##   SD_DATA1  IO7  | 7               36| IO44/RXD
+##   SD_DATA0 IO15  | 8               35| IO42  I2C_SCL
+##   SD_CLK   IO16  | 9               34| IO41  I2C_SDA
+##   SD_CMD   IO17  | 10              33| IO40
+##   SD_DATA3 IO18  | 11              32| IO39  AMP_PWR
+##   SD_DATA2  IO8  | 12              31| IO38
+##    (USB D-) IO19 | 13              30| IO37  (SPI-FLASH)
+##    (USB D+) IO20 | 14              29| IO36  (SPI-FLASH)
+## DISPL_BUSY IO3   | 15              28| IO35  (SPI-FLASH)
+##            IO46  | 16              27| IO0
+## DISPL_DC   IO9   | 17              26| IO45
+## DISPL_CS   IO10  | 18              25| IO48
+##    SPI_CLK IO11  | 19              24| IO47  I2S_CLK
+##   SPI_DATA IO12  | 20              23| IO21  I2S_DOUT
+##  I2S_BCLK IO13   | 21              22| IO14  I2S_MCLK
+##                  +-------------------+              
+
+## ------ SUBSTITUTIONS -------
+substitutions:
+  display_title: "Amelia"
+
+## ------ ESPHome HEADER -------
+esphome:
+  name: kids-screen
+  friendly_name: Kids-screen
+  comment: "3.97 E-ink display zum Anzeigen des Kalenders."
+  min_version: 2026.8.0
+  name_add_mac_suffix: false
+  
+  on_boot:
+    - priority: 600
+      then:
+        - lambda: |-
+            const gpio_num_t jog_pins[3] = {GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6};
+            for (auto p : jog_pins) {
+              gpio_reset_pin(p);
+              gpio_set_direction(p, GPIO_MODE_INPUT);
+              gpio_set_pull_mode(p, GPIO_PULLUP_ONLY);
+            }
+    - priority: -10
+      then:
+        - output.turn_on: epd_vcc
+        - output.turn_on: audio_ctr_vcc
+        - output.turn_on: audio_vcc
+        - delay: 200ms
+    #    - lambda: |-
+    #        if (id(display_sd).is_failed()) {
+    #          ESP_LOGW("main", "Keine SD-Karte erkannt oder Mount fehlgeschlagen");
+    #        }
+
+## ------ ESP32 configuration ------
+## Please be aware of changing one of these configuration options could cause in uncompilable code.
+esp32:
+  board: esp32-s3-devkitc1-n16r8   # ggf. auf dein konkretes Board anpassen
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+      CONFIG_FATFS_LFN_STACK: "y"
+    advanced:
+      include_builtin_idf_components: ["fatfs", "spiffs"]
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
+
+psram:
+  mode: octal
+  speed: 80MHZ
+
+#external_components:
+#  - source: github://stefanthoss/esphome-axp2101
+#    components: [ axp2101 ]
+external_components:
+  - source: github://m5stack/esphome-yaml/components
+    components: [axp2101 ]
+  ## -- SD Card Component --
+  - source: 
+      type: git
+      url: https://github.com/n-serrette/esphome_sd_card
+      ref: main
+    components: [sd_mmc_card]#[sd_file_server, sd_mmc_card]
+
+## ------ GLOBALS -------
+globals:
+  - id: selected_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: item_uids
+    type: 'std::vector<std::string>'
+    restore_value: no
+  - id: item_summaries
+    type: 'std::vector<std::string>'
+    restore_value: no
+  - id: item_dues
+    type: 'std::vector<std::string>'
+    restore_value: no
+  - id: item_descriptions
+    type: 'std::vector<std::string>'
+    restore_value: no
+  - id: pending_uid
+    type: std::string
+    restore_value: no
+  ## --- Confirmation ---
+  - id: confirmation_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: confirmation_text
+    type: std::string
+    restore_value: no
+    
+wifi:
+  id: wifi_comp
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: kuehlschrank.local ## when 
+  #power_save_mode: NONE
+  fast_connect: true ## Optional: speeds up connection
+
+## Optional manual IP
+  #manual_ip:
+  #  static_ip: 192.168.0.123
+  #  gateway: 192.168.0.1
+  #  subnet: 255.255.255.0
+  
+## Enable fallback hotspot (captive portal) in case wifi connection fails
+## SECTION: CAPTIVE PORTAL must be active
+  ap:
+    ssid: "Kuehlschrank Fallback Hotspot"
+    password: "embinotec"
+
+## ------ WEB SERVER SETTINGS -------
+## If webserver is activeted your weatherstation will be reachable in your browsers address bar http://<use_address>
+web_server:
+  port: 80
+
+## ------- CAPTIVE PORTAL SETTINGS --------
+## Works together with SUBSECTION wifi.ap
+captive_portal:
+
+## ------- mDNS SETTINGS -------
+## mDNS is a computer networking protocol that resolves hostnames to IP addresses within small networks that do not include a local name server.
+## example: kuehlschrank.local
+mdns:
+  disabled: false # Set to true to disable mDNS
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+
+## ------ WEB SERIAL --------
+## Improve serial is a standard to connect by webserial and cable
+#improv_serial:
+
+## SUB:------ ESP32 Improve ------
+## solid: The improv service is active and waiting to be authorized.
+## blinking once per second: The improv service is awaiting credentials.
+## blinking 3 times per second with a break in between: The identify command has been used by the client.
+## blinking 5 times per second: Credentials are being verified and saved to the device.
+## off: The improv service is not running.
+#esp32_improv:
+#  authorizer: user_button
+
+## ------- POWER MANGEMENT -------
+## ESP32 should be powered by three times 2800mAh rechargable AA batteries.
+## To save some power the ESP should not always be connected to your wifi and have some rest
+## to cover the hole day with measurements.
+deep_sleep:
+  id: during_day
+  run_duration: 5min
+  sleep_duration: 13min
+  esp32_ext1_wakeup: 
+    mode: ANY_LOW
+    pins: 
+        - pin: 
+            number: GPIO4 ## JOG-UP
+         #   allow_other_uses: true
+          on_wake:
+            then:
+              - logger.log: "awake"
+        - pin: 
+            number: GPIO5   ## JOG-PUSH
+          #  allow_other_uses: true
+          on_wake:
+            then:
+              - logger.log: "awake"
+        - pin: 
+            number: GPIO6  ## JOG-DOWN
+          #  allow_other_uses: true
+          on_wake:
+            then:
+              - logger.log: "awake"
+  #- id: during_night
+  #  run_duration: 5min
+  #  sleep_duration: 30min
+
+
+
+## ------ LOGGING ------
+## Options: NONE, ERROR, WARN, INFO, DEBUG, VERBOSE, VERY_VERBOSE
+logger:
+  baud_rate: 115200  ## 0=Disable, 
+  level: NONE
+
+# --- SPI-Bus fürs Display ---
+spi:
+  - id: epd_spi
+    clk_pin: GPIO11
+    mosi_pin: GPIO12
+
+   
+## ------ I2C SETTINGS ----------
+## DO NOT CHANGE !!!
+## I2C is an IC to IC connection to read for instance digital values from sensors.
+i2c:
+  - id: bus_a
+    sda: GPIO41
+    scl:
+      number: GPIO42
+    frequency: 100kHz
+    scan: true
+
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    bits_per_sample: 16bit
+    sample_rate: 16000
+
+## AudioCTR_PWR, when R23 is assembled, otherwise ALDO2@apx2101 is used.
+power_supply:
+  - id: amp_power
+    pin: GPIO39
+    enable_time: 210ms      # Einschwingzeit des NS4150B nach Enable, ggf. anpassen
+    keep_on_time: 80ms    # wie lange nach dem letzten Ton noch an bleibt
+    
+## ------- I2S BUS SETTINGS -------
+i2s_audio:
+  - id: i2s_out     
+    i2s_bclk_pin:
+      number: GPIO14
+   #   ignore_strapping_warning: true
+    i2s_lrclk_pin:
+      number: GPIO47
+      #ignore_strapping_warning: true
+    i2s_mclk_pin: GPIO13
+  #- id: i2s_in  ## PDM microphone: clock=GPIO5
+    #i2s_lrclk_pin: GPIO5
+
+## -------- AUDIO -------------
+speaker:
+  # Raw I2S output to the DAC
+  - platform: i2s_audio
+    id: i2s_speaker_raw
+    i2s_audio_id: i2s_out
+    i2s_dout_pin: GPIO21
+    dac_type: external
+    channel: stereo
+  # Mixer: combines the music channel and the announcement (TTS) channel on one speaker
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: i2s_speaker_raw
+    source_speakers:
+      - id: announcement_mixing_input
+      - id: media_mixing_input
+  # Resamplers (match source sample rates to the mixer)
+  - platform: resampler
+    id: media_resampling_speaker
+    output_speaker: media_mixing_input
+  - platform: resampler
+    id: announcement_resampling_speaker
+    output_speaker: announcement_mixing_input
+
+media_player:
+  - platform: speaker
+    name: "Player"
+    id: media_player_speaker
+    announcement_pipeline:
+      speaker: announcement_resampling_speaker
+    media_pipeline:
+      speaker: media_resampling_speaker
+    files:
+      - id: test_sound
+        file: audio/test_tone.wav
+
+## ------- Microphone SETTINGS -------
+#microphone:
+#  - platform: i2s_audio
+#    id: i2s_microphone
+#    i2s_audio_id: i2s_in
+#    i2s_din_pin: GPIO4
+#    adc_type: external
+#    pdm: true
+#    #channel: left
+#    sample_rate: 16000
+#    bits_per_sample: 16bit
+#    on_data:
+#      - logger.log:
+#          format: "Mic-Daten: %d Samples"
+#          args: ['x.size()']
+
+## ------- TIME -------
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: Europe/Berlin
+    #on_time:
+    #  - hours: 2,3,4,5
+    #    minutes: 5
+    #   seconds: 0
+    #    then:
+    #      - switch.turn_on: switch_antiburn
+    #  - hours: 2,3,4,5
+    #    minutes: 35
+    #    seconds: 0
+    #    then:
+    #      - switch.turn_off: switch_antiburn
+    
+  ## -- RTC PCF85063ATL ---
+  - platform: pcf85063
+    id: pcf85063_time
+## ------ NTP SERVER -------
+## NTP Server to receive the time by NTP server.
+
+
+    
+# --- Schriften mit erweitertem Zeichensatz (Umlaute, ß, ✓) ---
+font:
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_icons
+    size: 32
+    glyphs: ["\U000F07DC"]   ## mdi:microsd
+  
+  - file: "gfonts://Roboto"
+    id: font_title
+    size: 36
+    glyphs: &glyphs_extended
+      - " !\"%'()+,-./0123456789:;<=>?"
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      - "abcdefghijklmnopqrstuvwxyz"
+      - "ÄÖÜäöüß"
+      #- "√"
+  
+  - file: "gfonts://Roboto"
+    id: font_item
+    size: 24
+    glyphs: *glyphs_extended
+  
+  - file: "gfonts://Roboto"
+    id: date
+    size: 20
+    glyphs: *glyphs_extended
+  
+  - file: "gfonts://Roboto"
+    id: due_date
+    size: 20
+    glyphs: *glyphs_extended
+  
+  - file: "gfonts://Roboto"
+    id: font_desc
+    size: 18
+    glyphs: *glyphs_extended
+
+status_led:
+  pin: 
+    number: GPIO43   ## LED1/TXD0
+    #number: GPIO44   ## LED2/RXD0
+    inverted: false
+
+
+# --- Todo-Text aus Home Assistant holen ---
+# Erwartet: ${ha_sensor_entity} mit Attribut "list" (siehe HA-Config unten)
+text_sensor:
+  - platform: homeassistant
+    id: cal_heute
+    entity_id: sensor.eink_kalender
+    attribute: heute
+    internal: true
+    on_value:
+      - logger.log:
+          format: "cal_heute: '%s'"
+          args: ['x.c_str()']
+  - platform: homeassistant
+    id: cal_morgen
+    entity_id: sensor.eink_kalender
+    attribute: morgen
+    internal: true
+    on_value:
+      - logger.log:
+          format: "cal_morgen: '%s'"
+          args: ['x.c_str()']
+  - platform: homeassistant
+    id: stundenplan
+    entity_id: sensor.eink_stundenplan
+    attribute: tabelle
+    internal: true
+
+binary_sensor:
+  ## BOOT
+  - platform: gpio
+    pin: GPIO0
+    name: "User button"
+    id: user_button
+    
+  ## Jog -up
+  - platform: template #gpio
+    id: up
+    #name: "up"
+    ## either template with lambda and filter, or gpio with pin
+    lambda: 'return gpio_get_level(GPIO_NUM_4) == 0;'
+    filters:
+      - delayed_on_off: 25ms
+    #pin:
+    #  number: GPIO4
+    #  inverted: true
+     # mode: INPUT_PULLUP
+      #allow_other_uses: true
+    on_press:
+      then:
+        - display.page.show: seite_stundenplan
+        - script.execute: refresh_display
+          
+  ## Jog - push
+  - platform: template #gpio
+    id: push
+    #name: "push"
+    lambda: 'return gpio_get_level(GPIO_NUM_5) == 0;'
+    filters:
+      - delayed_on_off: 25ms
+    #pin:
+    #  number: GPIO5
+    #  inverted: true
+     # allow_other_uses: true
+     # mode: INPUT_PULLUP
+ 
+ 
+## alternative function
+#        then:
+#          - lambda: |-
+#              int cnt = (int) id(item_uids).size();
+#              if (cnt > 0 && id(selected_index) < cnt) {
+#                id(pending_uid) = id(item_uids)[id(selected_index)];
+#              } else {
+#                id(pending_uid) = "";
+#              }
+#          - logger.log:
+#              format: "Push (3s): ausgewählte UID = '%s'"
+#              args: ['id(pending_uid).c_str()']
+#          - if:
+#              condition:
+#                lambda: 'return !id(pending_uid).empty();'
+#              then:
+#                - homeassistant.service:
+#                    service: todo.update_item
+#                    data:
+#                      entity_id: ${todo_entity}
+#                      item: !lambda 'return id(pending_uid);'
+#                      status: "completed" 
+#    
+      
+   ## Jog -down
+  - platform: template #gpio
+    id: down
+    #name: "down"
+    lambda: 'return gpio_get_level(GPIO_NUM_6) == 0;'
+    filters:
+      - delayed_on_off: 25ms
+    #pin: 
+    #  number: GPIO6
+    #  inverted: true
+      #allow_other_uses: true
+    #  mode: INPUT_PULLUP
+    on_press:
+      then:
+        - display.page.show: seite_kalender
+        - script.execute: refresh_display
+ 
+
+      ## ESD_CHG
+  - platform: gpio
+    id: esp_chg
+    name: "Charge in progress"
+    pin:
+      number: GPIO2
+      inverted: true
+
+  - platform: status
+    name: "Wifi status"
+
+  
+## qmi8658 motion sensor 
+#motion:
+#  - platform: qmi8658
+    #address: 0x6B   ## i2c_address: 0x6B, alt SA0 low=>0x6A
+#    accelerometer_range: 4G   ## OPTIONS: 2G, (4G), 8G, 16G
+#    gyroscope_range: 2048DPS  ## OPTIONS: 16DPS, 32DPS, 64DPS, 128DPS, 256DPS, 512DPS, 1024DPS, (2048DPS)
+    #gyroscope_odr: 1000HZ ## OPTIONS: 31_25HZ, 62_5HZ, 125HZ, 250HZ, 500HZ, (1000HZ), 2000HZ, 4000HZ, 8000HZ
+## SEE: sensor: - platform: motion
+
+axp2101:
+  id: axp2101_pmu
+  i2c_id: bus_a
+    
+sensor:
+#  - platform: axp2101
+#    model: M5CORE2
+#    address: 0x34
+#    i2c_id: bus_a
+#    update_interval: 30s
+#    brightness: 75%
+#    battery_voltage:
+#      name: "Battery Voltage"
+#    battery_level:
+#      name: "Battery Level"
+#    battery_charging:
+#      name: "Battery Charging"
+    
+#  - platform: motion
+#    type: acceleration_x
+#    name: "QMI8658 Accel X"
+#  - platform: motion
+#    type: gyroscope_x
+#    name: "QMI8658 Gyro X"
+#  - platform: motion
+#    type: roll
+#    name: "QMI8658 Roll"
+
+#  - platform: shtcx
+#    temperature:
+#      name: "Temperature"
+#    humidity:
+#      name: "Humidity"
+
+  ## SUB: ----- WIFI SIGNAL STRENGTH ------
+  - platform: wifi_signal
+    id: wifi_signal_sensor
+    name: "Wi-Fi.Signal strength"
+    #update_interval: 60s
+  ## SUB: ----- Internal Sensors-------
+  - platform: internal_temperature
+    name: "CPU Temperature"
+    update_interval: 30s  ## optional
+
+
+output:
+  - platform: axp2101
+    channel: ALDO3  ## EPD_VCC_AXP
+    voltage: 3300 #700
+    id: epd_vcc
+
+## IMPORTANT: Audio CTR_VCC for audio output only used, when R74 is connected.
+##            Otherwise AudioCTR_PIN is used
+##
+  - platform: axp2101
+    channel: ALDO1  ## AudioCTR_VCC
+    voltage: 1200   ## max. 1.2V ## startup time 120ms ## turn off time 80ms
+    id: audio_ctr_vcc
+
+    
+  
+  - platform: axp2101
+    channel: ALDO2  ## Audio_VCC
+    voltage: 3300
+    id: audio_vcc
+
+## ------ SWITCH ------
+switch:
+  - platform: template
+    name: "Disable Deep Sleep"
+    id: disable_sleep_switch
+    optimistic: true
+    turn_on_action:
+      - logger.log: "Deep sleep disabled via switch"
+      - deep_sleep.prevent: during_day
+    turn_off_action:
+      - logger.log: "Deep sleep enabled via switch"
+      - deep_sleep.allow: during_day 
+
+ 
+ 
+# Momentan-Taster: löst einen sauberen Reset-Puls aus (LOW für 20ms, dann wieder HIGH)
+#button:
+
+ 
+# Rohe BUSY-Leitung beobachten, ohne pullup/pulldown-Annahme zu erzwingen,
+# damit du siehst, was das Panel tatsächlich treibt (falls float: eher pullup testen)
+
+
+
+## --- e-Paper Display ------
+## 3.97" with SSD1677
+## https://docs.waveshare.com/ESP32-S3-ePaper-3.97/Resources-And-Documents
+display:
+  - platform: epaper_spi
+    id: eink_display
+    model: SSD1677
+    full_update_every: 20
+    update_interval: 45s   ## 30s display test, never@update by HA
+    spi_id: epd_spi
+    dimensions:
+      width: 800
+      height: 480
+    transform:
+      mirror_x: true
+      mirror_y: false
+    rotation: 0 #90 # Rotate to portrait
+    cs_pin: GPIO10
+    dc_pin: GPIO9
+    reset_pin: GPIO46
+#   reset_duration: 500ms
+    busy_pin: { number: GPIO3, inverted: false, mode: { input: True, pulldown: True } }
+    pages:
+      - id: seite_kalender
+        lambda: |-
+          auto WHITE = Color(255, 255, 255);  // level 3
+          auto LIGHT = Color(170, 170, 170);  // level 2
+          auto DARK  = Color(85, 85, 85);     // level 1
+          auto BLACK = Color(0, 0, 0);        // level 0
+    
+           /// --------------
+          // TEST
+          // ---------------
+          /*
+          it.fill(WHITE);                       // Hintergrund weiß
+          it.print(20, 20, id(font_title), BLACK, "Hello World!");
+          it.rectangle(0, 0, it.get_width() - 1, it.get_height() - 1);
+          */
+          
+          auto draw_block = [&](int x, const char *title, std::string txt) {
+            it.printf(x, 10, id(font_title),BLACK , "%s", title);
+            it.line(x, 55, x + 370, 55, BLACK);
+            int y = 70;
+            size_t pos = 0;
+            while (pos <= txt.size() && y < 460) {
+              size_t nl = txt.find('\n', pos);
+              if (nl == std::string::npos) nl = txt.size();
+              it.printf(x, y, id(font_item), BLACK, "%s", txt.substr(pos, nl - pos).c_str());
+              y += 36;
+              pos = nl + 1;
+            }
+          };
+          draw_block(15, "Heute", id(cal_heute).state);
+          draw_block(415, "Morgen", id(cal_morgen).state);
+          it.line(400, 10, 400, 470, BLACK);
+      
+      - id: seite_stundenplan
+        lambda: |-
+          auto WHITE = Color(255, 255, 255);  // level 3
+          auto LIGHT = Color(170, 170, 170);  // level 2
+          auto DARK  = Color(85, 85, 85);     // level 1
+          auto BLACK = Color(0, 0, 0);        // level 0
+          
+          std::string s = id(stundenplan).state;
+          const char *days[5] = {"Mo", "Di", "Mi", "Do", "Fr"};
+          const int x0 = 15, tw = 90, cw = 136, y0 = 10, hh = 48, rh = 46;
+          for (int c = 0; c < 5; c++)
+            //it.printf(x0 + tw + c * cw + cw / 2, y0, id(font_item), BLACK, TextAlign::TOP_CENTER, "%s", days[c]);
+            it.printf(x0 + tw + c * cw + cw / 2, y0, id(font_item), BLACK, "%s", days[c]);
+          it.line(x0, y0 + hh - 6, 785, y0 + hh - 6, BLACK);
+          int r = 0;
+          size_t pos = 0;
+          while (pos < s.size() && r < 8) {
+            size_t nl = s.find('\n', pos);
+            if (nl == std::string::npos) nl = s.size();
+            std::string row = s.substr(pos, nl - pos);
+            pos = nl + 1;
+            int y = y0 + hh + r * rh;
+            int c = -1;
+            size_t p = 0;
+            while (p <= row.size() && c < 5) {
+              size_t bar = row.find('|', p);
+              if (bar == std::string::npos) bar = row.size();
+              std::string cell = row.substr(p, bar - p);
+              if (cell.size() > 10) cell = cell.substr(0, 10);
+              int x = (c < 0) ? x0 : x0 + tw + c * cw + 4;
+              it.printf(x, y, id(font_desc), BLACK,"%s", cell.c_str());
+              p = bar + 1;
+              c++;
+            }
+            it.line(x0, y + rh - 6, 785, y + rh - 6, BLACK);
+            r++;
+          }
+
+script:
+  - id: refresh_display
+    mode: restart          # schnelles Drücken stapelt keine Refreshes
+    then:
+      - delay: 800ms
+      - component.update: eink_display
+
+
+## ----- SD CARD ------
+#sd_mmc_card:
+#  id: display_sd
+#  mode_1bit: false
+#  clk_pin: GPIO16    # SD_CLK
+#  cmd_pin: GPIO17    # SD_MOSI
+ # data0_pin: GPIO15  # SD_MISO
+ # data1_pin: GPIO7   # SD_D1
+# data2_pin: GPIO8   # SD_D2
+ # data3_pin: GPIO18  # SD_CS
+
+  
+#sd_file_server:
+#  id: file_server
+#  url_prefix: file
+#  root_path: "/"
+#  enable_deletion: true
+#  enable_download: true
+#  enable_upload: true
+      
+# =====================================================================
+# NICHT Teil der ESPHome-Config! Der folgende Block gehört in die
+# configuration.yaml von Home Assistant (oder eine per !include
+# eingebundene Datei) und erzeugt ${ha_sensor_entity} auf Basis von
+# ${todo_entity}. Bei Änderung von todo_entity oben bitte auch hier
+# "todo.kuhlschrank" entsprechend anpassen.
+# =====================================================================
+
