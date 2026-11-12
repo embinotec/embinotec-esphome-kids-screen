@@ -1,0 +1,20 @@
+- sensor:
+    - name: "Eink Stundenplan"
+      unique_id: eink_stundenplan
+      state: "{{ now().isoformat() }}"
+      attributes:
+        tabelle: >-       
+          {%- set rows = [
+          {'time': '1.', 'cells': ['FA', 'FA', 'FA', 'FA', 'FA']},
+          {'time': '2.', 'cells': ['FA', 'FA', 'FA', 'FA', 'FA']},
+          {'time': '3.', 'cells': ['Engl. M3/M4', 'FA', 'FA', 'FA', 'FA']},
+          {'time': '4.', 'cells': ['Sach. M8', 'Engl. M3/M4', 'Engl. Le M5', 'FA', 'FA']},
+          {'time': '5.', 'cells': ['Sach. M8', 'Sport', 'Musik M1', 'Religion M8', 'Kunst M3/M4']},
+          {'time': '6.', 'cells': ['Religion M8', 'Sport', '-', '-', 'Kunst M3/M4']},
+          
+          ] -%}
+          {% for r in rows[:8] -%}
+          {{ r.time }}|{{ r.cells | map('replace', '\n', ' ') | join('|') }}{{ '\n' if not loop.last }}
+          {%- endfor %}
+
+#{% set rows = state_attr('sensor.DEIN_WOCHE_SENSOR', 'rows') or [] %}
